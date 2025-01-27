@@ -120,6 +120,7 @@ def create(image_list, data_list, save_folder):
     seg_maps = torch.zeros((len(image_list), 4, *image_list[0].shape[1:])) 
     mask_generator.predictor.model.to('cuda')
 
+    print(image_list.shape)
     for i, img in tqdm(enumerate(image_list), desc="Embedding images", leave=False):
         timer += 1
         try:
@@ -160,6 +161,7 @@ def create(image_list, data_list, save_folder):
         
     for i in range(img_embeds.shape[0]):
         save_path = os.path.join(save_folder, data_list[i].split('.')[0])
+        print(save_path)
         assert total_lengths[i] == int(seg_maps[i].max() + 1)
         curr = {
             'feature': img_embeds[i, :total_lengths[i]],
@@ -197,6 +199,7 @@ def get_seg_img(mask, image):
 
 def pad_img(img):
     h, w, _ = img.shape
+    # print(f"(H, W) = ({h}, {w})")
     l = max(w,h)
     pad = np.zeros((l,l,3), dtype=np.uint8)
     if h > w:
@@ -233,21 +236,38 @@ def mask_nms(masks, scores, iou_thr=0.7, score_thr=0.1, inner_thr=0.2, **kwargs)
     masks_ord = masks[idx.view(-1), :]
     masks_area = torch.sum(masks_ord, dim=(1, 2), dtype=torch.float)
 
-    iou_matrix = torch.zeros((num_masks,) * 2, dtype=torch.float, device=masks.device)
-    inner_iou_matrix = torch.zeros((num_masks,) * 2, dtype=torch.float, device=masks.device)
-    for i in range(num_masks):
-        for j in range(i, num_masks):
-            intersection = torch.sum(torch.logical_and(masks_ord[i], masks_ord[j]), dtype=torch.float)
-            union = torch.sum(torch.logical_or(masks_ord[i], masks_ord[j]), dtype=torch.float)
-            iou = intersection / union
-            iou_matrix[i, j] = iou
-            # select mask pairs that may have a severe internal relationship
-            if intersection / masks_area[i] < 0.5 and intersection / masks_area[j] >= 0.85:
-                inner_iou = 1 - (intersection / masks_area[j]) * (intersection / masks_area[i])
-                inner_iou_matrix[i, j] = inner_iou
-            if intersection / masks_area[i] >= 0.85 and intersection / masks_area[j] < 0.5:
-                inner_iou = 1 - (intersection / masks_area[j]) * (intersection / masks_area[i])
-                inner_iou_matrix[j, i] = inner_iou
+    # iou_matrix = torch.zeros((num_masks,) * 2, dtype=torch.float, device=masks.device)
+    # inner_iou_matrix = torch.zeros((num_masks,) * 2, dtype=torch.float, device=masks.device)
+    # for i in range(num_masks):
+    #     for j in range(i, num_masks):
+    #         intersection = torch.sum(torch.logical_and(masks_ord[i], masks_ord[j]), dtype=torch.float)
+    #         union = torch.sum(torch.logical_or(masks_ord[i], masks_ord[j]), dtype=torch.float)
+    #         iou = intersection / union
+    #         iou_matrix[i, j] = iou
+    #         # select mask pairs that may have a severe internal relationship
+    #         if intersection / masks_area[i] < 0.5 and intersection / masks_area[j] >= 0.85:
+    #             inner_iou = 1 - (intersection / masks_area[j]) * (intersection / masks_area[i])
+    #             inner_iou_matrix[i, j] = inner_iou
+    #         if intersection / masks_area[i] >= 0.85 and intersection / masks_area[j] < 0.5:
+    #             inner_iou = 1 - (intersection / masks_area[j]) * (intersection / masks_area[i])
+    #             inner_iou_matrix[j, i] = inner_iou
+    masks_area = masks_area.float().cuda()
+    masks_flat = masks_ord.reshape(num_masks, -1).float().cuda()
+    intersection = masks_flat @ masks_flat.T
+    union = masks_area[:, None] + masks_area[None, :] - intersection
+    iou_matrix = intersection / union
+    iou_matrix = torch.triu(iou_matrix)
+    intersection_over_i = intersection / masks_area[:, None]
+    intersection_over_j = intersection / masks_area[None, :]
+    cond1 = (intersection_over_i < 0.5) & (intersection_over_j >= 0.85)
+    cond2 = (intersection_over_i >= 0.85) & (intersection_over_j < 0.5)
+    inner_iou_matrix = torch.zeros_like(iou_matrix)
+    inner_iou = 1 - intersection_over_i * intersection_over_j
+    inner_iou_matrix[cond1] = inner_iou[cond1]
+    i, j = torch.where(cond2)
+    inner_iou_matrix[j, i] = inner_iou[i, j]
+    iou_matrix = iou_matrix.cpu()
+    inner_iou_matrix = inner_iou_matrix.cpu()
 
     iou_matrix.triu_(diagonal=1)
     iou_max, _ = iou_matrix.max(dim=0)
@@ -307,7 +327,11 @@ def sam_encoder(image):
         for i in range(len(masks)):
             mask = masks[i]
             seg_img = get_seg_img(mask, image)
-            pad_seg_img = cv2.resize(pad_img(seg_img), (224,224))
+            h, w, _ = seg_img.shape
+            if h == 0 or w == 0:
+                pad_seg_img = np.zeros((224, 224, 3), dtype = np.uint8)
+            else:   
+                pad_seg_img = cv2.resize(pad_img(seg_img), (224,224))
             seg_img_list.append(pad_seg_img)
 
             seg_map[masks[i]['segmentation']] = i
@@ -354,7 +378,7 @@ if __name__ == '__main__':
 
     dataset_path = args.dataset_path
     sam_ckpt_path = args.sam_ckpt_path
-    img_folder = os.path.join(dataset_path, 'images')
+    img_folder = os.path.join(dataset_path, 'rgb/2x')
     data_list = os.listdir(img_folder)
     data_list.sort()
 
