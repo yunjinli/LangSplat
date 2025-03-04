@@ -476,8 +476,8 @@ if __name__ == '__main__':
 
     dataset_path = args.dataset_path
     sam_ckpt_path = args.sam_ckpt_path
-    img_folder = os.path.join(dataset_path, 'rgb/2x')
-    # img_folder = os.path.join(dataset_path, 'images_2x')
+    # img_folder = os.path.join(dataset_path, 'rgb/2x')
+    img_folder = os.path.join(dataset_path, 'images_2x')
     data_list = os.listdir(img_folder)
     data_list.sort()
 

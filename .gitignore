@@ -10,3 +10,4 @@ tensorboard_3d
 events.out*
 ckpt
 release
+log
