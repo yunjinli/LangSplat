@@ -15,6 +15,7 @@ from copy import deepcopy
 import torch
 import torchvision
 from torch import nn
+import re
 
 try:
     import open_clip
@@ -168,6 +169,100 @@ def create(image_list, data_list, save_folder):
             'seg_maps': seg_maps[i]
         }
         sava_numpy(save_path, curr)
+        
+def create_single(image_list, data_list, save_folder, resolution):
+    assert image_list is not None, "image_list must be provided to generate features"
+    embed_size=512
+    seg_maps = []
+    total_lengths = []
+    timer = 0
+    # img_embeds = torch.zeros((len(image_list), 300, embed_size))
+    # seg_maps = torch.zeros((len(image_list), 4, *image_list[0].shape[1:])) 
+    mask_generator.predictor.model.to('cuda')
+
+    # print(image_list.shape)
+    for i, image_path in tqdm(enumerate(image_list), desc="Embedding images", leave=False):
+        # print(image_path)
+        image = cv2.imread(image_path)
+
+        orig_w, orig_h = image.shape[1], image.shape[0]
+        
+        # print(orig_w)
+        # print(orig_h)
+        if resolution == -1:
+            if orig_h > 1080:
+                if not WARNED:
+                    print("[ INFO ] Encountered quite large input images (>1080P), rescaling to 1080P.\n "
+                        "If this is not desired, please explicitly specify '--resolution/-r' as 1")
+                    WARNED = True
+                global_down = orig_h / 1080
+            else:
+                global_down = 1
+        else:
+            global_down = orig_w / resolution
+            
+        scale = float(global_down)
+        new_resolution = (int( orig_w  / scale), int(orig_h / scale))
+        
+        image = cv2.resize(image, new_resolution)
+        img = torch.from_numpy(image).permute(2, 0, 1)
+        
+        timer += 1
+        try:
+            img_embed, seg_map = _embed_clip_sam_tiles(img.unsqueeze(0), sam_encoder)
+        except:
+            raise ValueError(timer)
+
+        lengths = [len(v) for k, v in img_embed.items()]
+        total_length = sum(lengths)
+        # total_lengths.append(total_length)
+        
+        # if total_length > img_embeds.shape[1]:
+            # pad = total_length - img_embeds.shape[1]
+            # img_embeds = torch.cat([
+            #     img_embeds,
+            #     torch.zeros((len(image_list), pad, embed_size))
+            # ], dim=1)
+
+        img_embed = torch.cat([v for k, v in img_embed.items()], dim=0)
+        assert img_embed.shape[0] == total_length
+        # img_embeds[i, :total_length] = img_embed
+        
+        seg_map_tensor = []
+        lengths_cumsum = lengths.copy()
+        for j in range(1, len(lengths)):
+            lengths_cumsum[j] += lengths_cumsum[j-1]
+        for j, (k, v) in enumerate(seg_map.items()):
+            if j == 0:
+                seg_map_tensor.append(torch.from_numpy(v))
+                continue
+            assert v.max() == lengths[j] - 1, f"{j}, {v.max()}, {lengths[j]-1}"
+            v[v != -1] += lengths_cumsum[j-1]
+            seg_map_tensor.append(torch.from_numpy(v))
+        seg_map = torch.stack(seg_map_tensor, dim=0)
+        # seg_maps[i] = seg_map
+        save_path = os.path.join(save_folder, data_list[i].split('.')[0])
+        # print(save_path)
+        # assert total_lengths[i] == int(seg_maps[i].max() + 1)
+        assert total_length == int(seg_map.max() + 1)
+        curr = {
+            'feature': img_embed,
+            'seg_maps': seg_map
+        }
+        sava_numpy(save_path, curr)
+
+    # mask_generator.predictor.model.to('cpu')
+        
+    # for i in range(img_embeds.shape[0]):
+    #     save_path = os.path.join(save_folder, data_list[i].split('.')[0])
+    #     print(save_path)
+    #     assert total_lengths[i] == int(seg_maps[i].max() + 1)
+    #     curr = {
+    #         'feature': img_embeds[i, :total_lengths[i]],
+    #         'seg_maps': seg_maps[i]
+    #     }
+    #     sava_numpy(save_path, curr)
+        
 
 def sava_numpy(save_path, data):
     save_path_s = save_path + '_s.npy'
@@ -373,12 +468,15 @@ if __name__ == '__main__':
     parser.add_argument('--dataset_path', type=str, required=True)
     parser.add_argument('--resolution', type=int, default=-1)
     parser.add_argument('--sam_ckpt_path', type=str, default="ckpts/sam_vit_h_4b8939.pth")
+    parser.add_argument("--load_image_on_the_fly", action="store_true")
+    
     args = parser.parse_args()
     torch.set_default_dtype(torch.float32)
 
     dataset_path = args.dataset_path
     sam_ckpt_path = args.sam_ckpt_path
     img_folder = os.path.join(dataset_path, 'rgb/2x')
+    # img_folder = os.path.join(dataset_path, 'images_2x')
     data_list = os.listdir(img_folder)
     data_list.sort()
 
@@ -395,34 +493,82 @@ if __name__ == '__main__':
         min_mask_region_area=100,
     )
 
-    img_list = []
-    WARNED = False
-    for data_path in data_list:
-        image_path = os.path.join(img_folder, data_path)
-        image = cv2.imread(image_path)
+    if not args.load_image_on_the_fly:
+        print("Load images to RAM...")
+        img_list = []
+        WARNED = False
+        for data_path in data_list:
+            # print(data_path)
+            fid = (int)(re.findall(r'\d+', data_path)[-1])
+            if fid > 50:
+                continue
+            # print(fid)
+            image_path = os.path.join(img_folder, data_path)
+            image = cv2.imread(image_path)
 
-        orig_w, orig_h = image.shape[1], image.shape[0]
-        if args.resolution == -1:
-            if orig_h > 1080:
-                if not WARNED:
-                    print("[ INFO ] Encountered quite large input images (>1080P), rescaling to 1080P.\n "
-                        "If this is not desired, please explicitly specify '--resolution/-r' as 1")
-                    WARNED = True
-                global_down = orig_h / 1080
+            orig_w, orig_h = image.shape[1], image.shape[0]
+            if args.resolution == -1:
+                if orig_h > 1080:
+                    if not WARNED:
+                        print("[ INFO ] Encountered quite large input images (>1080P), rescaling to 1080P.\n "
+                            "If this is not desired, please explicitly specify '--resolution/-r' as 1")
+                        WARNED = True
+                    global_down = orig_h / 1080
+                else:
+                    global_down = 1
             else:
-                global_down = 1
-        else:
-            global_down = orig_w / args.resolution
+                global_down = orig_w / args.resolution
+                
+            scale = float(global_down)
+            resolution = (int( orig_w  / scale), int(orig_h / scale))
             
-        scale = float(global_down)
-        resolution = (int( orig_w  / scale), int(orig_h / scale))
-        
-        image = cv2.resize(image, resolution)
-        image = torch.from_numpy(image)
-        img_list.append(image)
-    images = [img_list[i].permute(2, 0, 1)[None, ...] for i in range(len(img_list))]
-    imgs = torch.cat(images)
+            image = cv2.resize(image, resolution)
+            image = torch.from_numpy(image)
+            img_list.append(image)
+        images = [img_list[i].permute(2, 0, 1)[None, ...] for i in range(len(img_list))]
+        imgs = torch.cat(images)
 
-    save_folder = os.path.join(dataset_path, 'language_features')
-    os.makedirs(save_folder, exist_ok=True)
-    create(imgs, data_list, save_folder)
+        save_folder = os.path.join(dataset_path, 'language_features')
+        os.makedirs(save_folder, exist_ok=True)
+        create(imgs, data_list, save_folder)
+    else:
+        print("Load images on-the-fly...")
+        img_path_list = []
+        WARNED = False
+        for data_path in data_list:
+            # print(data_path)
+            fid = (int)(re.findall(r'\d+', data_path)[-1])
+            if fid > 50:
+                continue
+            # print(fid)
+            image_path = os.path.join(img_folder, data_path)
+            img_path_list.append(image_path)
+        #     image = cv2.imread(image_path)
+
+        #     orig_w, orig_h = image.shape[1], image.shape[0]
+        #     if args.resolution == -1:
+        #         if orig_h > 1080:
+        #             if not WARNED:
+        #                 print("[ INFO ] Encountered quite large input images (>1080P), rescaling to 1080P.\n "
+        #                     "If this is not desired, please explicitly specify '--resolution/-r' as 1")
+        #                 WARNED = True
+        #             global_down = orig_h / 1080
+        #         else:
+        #             global_down = 1
+        #     else:
+        #         global_down = orig_w / args.resolution
+                
+        #     scale = float(global_down)
+        #     resolution = (int( orig_w  / scale), int(orig_h / scale))
+            
+        #     image = cv2.resize(image, resolution)
+        #     image = torch.from_numpy(image)
+        #     img_list.append(image)
+        # images = [img_list[i].permute(2, 0, 1)[None, ...] for i in range(len(img_list))]
+        # imgs = torch.cat(images)
+
+        save_folder = os.path.join(dataset_path, 'language_features')
+        os.makedirs(save_folder, exist_ok=True)
+        create_single(img_path_list, data_list, save_folder, args.resolution)
+        
+    
