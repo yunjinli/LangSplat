@@ -467,6 +467,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_path', type=str, required=True)
     parser.add_argument('--resolution', type=int, default=-1)
+    parser.add_argument('--end_frame', type=int, default=-1)
     parser.add_argument('--sam_ckpt_path', type=str, default="ckpts/sam_vit_h_4b8939.pth")
     parser.add_argument("--load_image_on_the_fly", action="store_true")
     
@@ -499,9 +500,10 @@ if __name__ == '__main__':
         WARNED = False
         for data_path in data_list:
             # print(data_path)
-            fid = (int)(re.findall(r'\d+', data_path)[-1])
-            if fid > 50:
-                continue
+            if args.end_frame != -1:
+                fid = (int)(re.findall(r'\d+', data_path)[-1])
+                if fid > args.end_frame:
+                    continue
             # print(fid)
             image_path = os.path.join(img_folder, data_path)
             image = cv2.imread(image_path)
@@ -530,16 +532,18 @@ if __name__ == '__main__':
 
         save_folder = os.path.join(dataset_path, 'language_features')
         os.makedirs(save_folder, exist_ok=True)
+        print("Number of images: ", len(imgs))
+        
         create(imgs, data_list, save_folder)
     else:
         print("Load images on-the-fly...")
         img_path_list = []
         WARNED = False
         for data_path in data_list:
-            # print(data_path)
-            fid = (int)(re.findall(r'\d+', data_path)[-1])
-            if fid > 50:
-                continue
+            if args.end_frame != -1:
+                fid = (int)(re.findall(r'\d+', data_path)[-1])
+                if fid > args.end_frame:
+                    continue
             # print(fid)
             image_path = os.path.join(img_folder, data_path)
             img_path_list.append(image_path)
@@ -569,6 +573,7 @@ if __name__ == '__main__':
 
         save_folder = os.path.join(dataset_path, 'language_features')
         os.makedirs(save_folder, exist_ok=True)
+        print("Number of images: ", len(img_path_list))
         create_single(img_path_list, data_list, save_folder, args.resolution)
         
     
