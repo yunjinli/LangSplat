@@ -183,6 +183,9 @@ def create_single(image_list, data_list, save_folder, resolution):
     # print(image_list.shape)
     for i, image_path in tqdm(enumerate(image_list), desc="Embedding images", leave=False):
         # print(image_path)
+        save_path = os.path.join(save_folder, data_list[i].split('.')[0])
+        if is_saved(save_path=save_path):
+            continue
         image = cv2.imread(image_path)
 
         orig_w, orig_h = image.shape[1], image.shape[0]
@@ -241,7 +244,7 @@ def create_single(image_list, data_list, save_folder, resolution):
             seg_map_tensor.append(torch.from_numpy(v))
         seg_map = torch.stack(seg_map_tensor, dim=0)
         # seg_maps[i] = seg_map
-        save_path = os.path.join(save_folder, data_list[i].split('.')[0])
+        # save_path = os.path.join(save_folder, data_list[i].split('.')[0])
         # print(save_path)
         # assert total_lengths[i] == int(seg_maps[i].max() + 1)
         assert total_length == int(seg_map.max() + 1)
@@ -270,6 +273,15 @@ def sava_numpy(save_path, data):
     np.save(save_path_s, data['seg_maps'].numpy())
     np.save(save_path_f, data['feature'].numpy())
 
+def is_saved(save_path):
+    save_path_s = save_path + '_s.npy'
+    save_path_f = save_path + '_f.npy'
+    if os.path.exists(save_path_s) and os.path.exists(save_path_f):
+        print(f"Both {save_path_s} and {save_path_f} exist...Skip")
+        return True
+    else:
+        return False
+    
 def _embed_clip_sam_tiles(image, sam_encoder):
     aug_imgs = torch.cat([image])
     seg_images, seg_map = sam_encoder(aug_imgs)
