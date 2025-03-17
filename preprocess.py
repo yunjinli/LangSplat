@@ -487,12 +487,17 @@ if __name__ == '__main__':
     torch.set_default_dtype(torch.float32)
 
     dataset_path = args.dataset_path
+    print(dataset_path)
     sam_ckpt_path = args.sam_ckpt_path
     # img_folder = os.path.join(dataset_path, 'rgb/2x')
     img_folder = os.path.join(dataset_path, 'images_2x')
     data_list = os.listdir(img_folder)
     data_list.sort()
-
+    
+    import pickle
+    with open(os.path.join(dataset_path, 'language_features', 'data_list.pkl'), "wb") as fp:   #Pickling
+        pickle.dump(data_list, fp)
+        
     model = OpenCLIPNetwork(OpenCLIPNetworkConfig)
     sam = sam_model_registry["vit_h"](checkpoint=sam_ckpt_path).to('cuda')
     mask_generator = SamAutomaticMaskGenerator(
@@ -588,4 +593,4 @@ if __name__ == '__main__':
         print("Number of images: ", len(img_path_list))
         create_single(img_path_list, data_list, save_folder, args.resolution)
         
-    
+    print("Process completed...")
